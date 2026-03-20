@@ -1,0 +1,13 @@
+# Local environment and secrets
+.env
+**/.env
+**/credentials/service-account.json
+
+# Local databases
+data/*.db
+**/data/*.db
+
+# Python cache artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
