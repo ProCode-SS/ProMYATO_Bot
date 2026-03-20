@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 from tempfile import gettempdir
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,22 +19,22 @@ class Settings(BaseSettings):
     GOOGLE_SERVICE_ACCOUNT_JSON: str = ""
 
     TIMEZONE: str = "Europe/Kyiv"
-    THERAPIST_NAME: str = "Масажист"
+    THERAPIST_NAME: str = "РњР°СЃР°Р¶РёСЃС‚"
     LOCATION: str = ""
 
     DATABASE_PATH: str = "./data/bot.db"
 
     def model_post_init(self, __context) -> None:
-        if not self.GOOGLE_SERVICE_ACCOUNT_JSON:
-            return
+        if self.GOOGLE_SERVICE_ACCOUNT_JSON:
+            temp_credentials_path = (
+                Path(gettempdir()) / "promyato-google-service-account.json"
+            )
+            temp_credentials_path.write_text(
+                self.GOOGLE_SERVICE_ACCOUNT_JSON, encoding="utf-8"
+            )
+            self.GOOGLE_SERVICE_ACCOUNT_FILE = str(temp_credentials_path)
 
-        temp_credentials_path = (
-            Path(gettempdir()) / "promyato-google-service-account.json"
-        )
-        temp_credentials_path.write_text(
-            self.GOOGLE_SERVICE_ACCOUNT_JSON, encoding="utf-8"
-        )
-        self.GOOGLE_SERVICE_ACCOUNT_FILE = str(temp_credentials_path)
+        Path(self.DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()
