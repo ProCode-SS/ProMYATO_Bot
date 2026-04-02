@@ -42,18 +42,9 @@ async def my_bookings(
         await call.answer()
         return
 
-    lines = [MY_BOOKINGS_HEADER]
-    for b in bookings:
-        start_kyiv = utc_to_kyiv(datetime.fromisoformat(b["start_time"]))
-        confirmed = " ✅" if b.get("confirmed_at") else ""
-        lines.append(
-            f"\n{format_date_uk(start_kyiv.date(), MONTHS_UK)} "
-            f"{format_time(start_kyiv.time())} — {b['service_name']}{confirmed}"
-        )
-
     await state.set_state(MyBookingsStates.view)
     await call.message.edit_text(
-        "\n".join(lines), reply_markup=my_bookings_keyboard(bookings)
+        MY_BOOKINGS_HEADER, reply_markup=my_bookings_keyboard(bookings)
     )
     await call.answer()
 

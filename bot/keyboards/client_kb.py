@@ -190,13 +190,26 @@ def reminder_confirm_keyboard(booking_id: int) -> InlineKeyboardMarkup:
 
 
 def my_bookings_keyboard(bookings: list[dict]) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
+    from datetime import datetime
+    from bot.utils.datetime_helpers import format_time, utc_to_kyiv
+    from bot.utils.texts import MONTHS_UK, WEEKDAY_HEADERS
+
+    rows = []
     for b in bookings:
-        kb.button(text="📅 В календар", callback_data=f"ics:{b['id']}")
-        kb.button(text="❌ Скасувати", callback_data=f"cancel:{b['id']}")
-    kb.button(text="Назад", callback_data="menu:back")
-    kb.adjust(*([2] * len(bookings)), 1)
-    return kb.as_markup()
+        start_kyiv = utc_to_kyiv(datetime.fromisoformat(b["start_time"]))
+        day_abbr = WEEKDAY_HEADERS[start_kyiv.weekday()]
+        confirmed = " ✅" if b.get("confirmed_at") else ""
+        label = (
+            f"{start_kyiv.day} {MONTHS_UK[start_kyiv.month]}, {day_abbr} "
+            f"{format_time(start_kyiv.time())} — {b['service_name']}{confirmed}"
+        )
+        rows.append([InlineKeyboardButton(text=label, callback_data="noop")])
+        rows.append([
+            InlineKeyboardButton(text="📅 В календар", callback_data=f"ics:{b['id']}"),
+            InlineKeyboardButton(text="❌ Скасувати", callback_data=f"cancel:{b['id']}"),
+        ])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="menu:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def cancel_confirm_keyboard(booking_id: int) -> InlineKeyboardMarkup:

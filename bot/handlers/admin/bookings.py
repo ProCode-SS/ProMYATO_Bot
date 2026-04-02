@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import aiosqlite
 from aiogram import Bot, F, Router
 from aiogram.types import BufferedInputFile, CallbackQuery
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.keyboards.admin_kb import admin_menu_keyboard
 from bot.models.database import get_booking, get_today_bookings, get_week_bookings
@@ -13,28 +13,32 @@ from bot.services.group_notify import notify_group_cancellation
 from bot.services.ics_generator import generate_ics
 from bot.services.reminder_service import ReminderService
 from bot.utils.datetime_helpers import format_date_uk, format_time, utc_to_kyiv
-from bot.utils.texts import ICS_FILENAME, MONTHS_UK, NO_BOOKINGS_TODAY, NO_BOOKINGS_WEEK
+from bot.utils.texts import ICS_FILENAME, MONTHS_UK, NO_BOOKINGS_TODAY, NO_BOOKINGS_WEEK, WEEKDAY_HEADERS
 
 router = Router()
 
 
-def _booking_line(b: dict) -> str:
-    start_kyiv = utc_to_kyiv(datetime.fromisoformat(b["start_time"]))
-    time_str = format_time(start_kyiv.time())
-    name = f"{b['first_name']} {b.get('last_name') or ''}".strip()
-    phone = b.get("phone") or "—"
-    confirmed = " ✅" if b.get("confirmed_at") else ""
-    return f"{time_str} — {name} — {b['service_name']} {b['duration_minutes']}хв — {phone}{confirmed}"
-
-
-def _bookings_keyboard(bookings: list[dict], source: str):
-    kb = InlineKeyboardBuilder()
+def _bookings_keyboard(bookings: list[dict], source: str) -> InlineKeyboardMarkup:
+    rows = []
     for b in bookings:
-        kb.button(text="📅 ICS", callback_data=f"admin:ics:{b['id']}")
-        kb.button(text="❌ Скасувати", callback_data=f"admin:cancel:{source}:{b['id']}")
-    kb.button(text="Назад", callback_data="admin:menu")
-    kb.adjust(*([2] * len(bookings)), 1)
-    return kb.as_markup()
+        start_kyiv = utc_to_kyiv(datetime.fromisoformat(b["start_time"]))
+        day_abbr = WEEKDAY_HEADERS[start_kyiv.weekday()]
+        name = f"{b['first_name']} {b.get('last_name') or ''}".strip()
+        phone = b.get("phone") or "—"
+        confirmed = " ✅" if b.get("confirmed_at") else ""
+        label = (
+            f"{start_kyiv.day} {MONTHS_UK[start_kyiv.month]}, {day_abbr} "
+            f"{format_time(start_kyiv.time())} — {name} — "
+            f"{b['service_name']} {b['duration_minutes']}хв{confirmed}"
+        )
+        rows.append([InlineKeyboardButton(text=label, callback_data="noop")])
+        rows.append([InlineKeyboardButton(text=f"📞 {phone}", callback_data="noop")])
+        rows.append([
+            InlineKeyboardButton(text="📅 ICS", callback_data=f"admin:ics:{b['id']}"),
+            InlineKeyboardButton(text="❌ Скасувати", callback_data=f"admin:cancel:{source}:{b['id']}"),
+        ])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="admin:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.callback_query(F.data == "admin:today")
@@ -45,12 +49,9 @@ async def today_bookings(call: CallbackQuery, db: aiosqlite.Connection) -> None:
         await call.answer()
         return
 
-    lines = ["Записи на сьогодні:\n"]
-    for b in bookings:
-        lines.append(_booking_line(b))
-
     await call.message.edit_text(
-        "\n".join(lines), reply_markup=_bookings_keyboard(bookings, "today")
+        f"Записи на сьогодні ({len(bookings)}):",
+        reply_markup=_bookings_keyboard(bookings, "today"),
     )
     await call.answer()
 
@@ -63,18 +64,9 @@ async def week_bookings(call: CallbackQuery, db: aiosqlite.Connection) -> None:
         await call.answer()
         return
 
-    lines = ["Записи на тиждень:\n"]
-    current_date = None
-    for b in bookings:
-        start_kyiv = utc_to_kyiv(datetime.fromisoformat(b["start_time"]))
-        d = start_kyiv.date()
-        if d != current_date:
-            current_date = d
-            lines.append(f"\n{format_date_uk(d, MONTHS_UK)}")
-        lines.append(_booking_line(b))
-
     await call.message.edit_text(
-        "\n".join(lines), reply_markup=_bookings_keyboard(bookings, "week")
+        f"Записи на тиждень ({len(bookings)}):",
+        reply_markup=_bookings_keyboard(bookings, "week"),
     )
     await call.answer()
 
@@ -152,26 +144,16 @@ async def admin_cancel_booking(
         if not bookings:
             await call.message.edit_text(NO_BOOKINGS_WEEK, reply_markup=admin_menu_keyboard())
             return
-        lines = ["Записи на тиждень:\n"]
-        current_date = None
-        for b in bookings:
-            start_kyiv = utc_to_kyiv(datetime.fromisoformat(b["start_time"]))
-            d = start_kyiv.date()
-            if d != current_date:
-                current_date = d
-                lines.append(f"\n{format_date_uk(d, MONTHS_UK)}")
-            lines.append(_booking_line(b))
         await call.message.edit_text(
-            "\n".join(lines), reply_markup=_bookings_keyboard(bookings, "week")
+            f"Записи на тиждень ({len(bookings)}):",
+            reply_markup=_bookings_keyboard(bookings, "week"),
         )
     else:
         bookings = await get_today_bookings(db)
         if not bookings:
             await call.message.edit_text(NO_BOOKINGS_TODAY, reply_markup=admin_menu_keyboard())
             return
-        lines = ["Записи на сьогодні:\n"]
-        for b in bookings:
-            lines.append(_booking_line(b))
         await call.message.edit_text(
-            "\n".join(lines), reply_markup=_bookings_keyboard(bookings, "today")
+            f"Записи на сьогодні ({len(bookings)}):",
+            reply_markup=_bookings_keyboard(bookings, "today"),
         )
