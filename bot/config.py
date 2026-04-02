@@ -24,6 +24,8 @@ class Settings(BaseSettings):
 
     DATABASE_PATH: str = "./data/bot.db"
 
+    CANCELLATION_GROUP_ID: str = ""  # Telegram group/channel ID for cancelled slot notifications
+
     def model_post_init(self, __context) -> None:
         if self.GOOGLE_SERVICE_ACCOUNT_JSON:
             temp_credentials_path = (

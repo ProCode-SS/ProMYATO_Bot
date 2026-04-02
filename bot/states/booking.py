@@ -1,6 +1,12 @@
 from aiogram.fsm.state import State, StatesGroup
 
 
+class RegistrationStates(StatesGroup):
+    enter_first_name = State()
+    enter_last_name = State()
+    wait_phone = State()
+
+
 class BookingStates(StatesGroup):
     select_service = State()
     select_date = State()
@@ -35,4 +41,18 @@ class AdminBookingStates(StatesGroup):
     select_time = State()
     enter_client_name = State()
     enter_client_phone = State()
+    confirm = State()
+
+
+class AdminVIPStates(StatesGroup):
+    add_by_phone = State()
+    search_by_name = State()
+    confirm_add = State()
+
+
+class AdminVIPBookingStates(StatesGroup):
+    select_client = State()
+    select_service = State()
+    enter_time = State()
+    select_dates = State()
     confirm = State()

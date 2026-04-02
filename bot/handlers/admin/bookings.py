@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 import aiosqlite
 from aiogram import Bot, F, Router
@@ -9,6 +9,7 @@ from bot.keyboards.admin_kb import admin_menu_keyboard
 from bot.models.database import get_booking, get_today_bookings, get_week_bookings
 from bot.services.booking_service import cancel_existing_booking
 from bot.services.calendar_service import CalendarService
+from bot.services.group_notify import notify_group_cancellation
 from bot.services.ics_generator import generate_ics
 from bot.services.reminder_service import ReminderService
 from bot.utils.datetime_helpers import format_date_uk, format_time, utc_to_kyiv
@@ -22,7 +23,8 @@ def _booking_line(b: dict) -> str:
     time_str = format_time(start_kyiv.time())
     name = f"{b['first_name']} {b.get('last_name') or ''}".strip()
     phone = b.get("phone") or "—"
-    return f"{time_str} — {name} — {b['service_name']} {b['duration_minutes']}хв — {phone}"
+    confirmed = " ✅" if b.get("confirmed_at") else ""
+    return f"{time_str} — {name} — {b['service_name']} {b['duration_minutes']}хв — {phone}{confirmed}"
 
 
 def _bookings_keyboard(bookings: list[dict], source: str):
@@ -116,15 +118,32 @@ async def admin_cancel_booking(
     db: aiosqlite.Connection,
     calendar: CalendarService,
     reminder_service: ReminderService,
+    bot: Bot,
+    cancellation_group_id: str,
 ) -> None:
     parts = call.data.split(":")
     source = parts[2]
     booking_id = int(parts[3])
 
+    booking = await get_booking(db, booking_id)
     success = await cancel_existing_booking(db, calendar, booking_id)
     if success:
         reminder_service.cancel_reminders(booking_id)
         await call.answer("Запис скасовано.", show_alert=True)
+
+        if booking:
+            # Determine urgency
+            now = datetime.now(timezone.utc)
+            start_utc = datetime.fromisoformat(booking["start_time"])
+            if not start_utc.tzinfo:
+                from zoneinfo import ZoneInfo
+                start_utc = start_utc.replace(tzinfo=ZoneInfo("UTC"))
+            hours_until = (start_utc - now).total_seconds() / 3600
+            is_urgent = bool(booking.get("confirmed_at")) and hours_until < 12
+
+            await notify_group_cancellation(
+                bot, db, cancellation_group_id, booking, is_urgent=is_urgent
+            )
     else:
         await call.answer("Не вдалось скасувати.", show_alert=True)
 

@@ -29,13 +29,24 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
+    # Fetch bot username for deeplinks
+    bot_info = await bot.get_me()
+    bot_username = bot_info.username
+
     calendar = CalendarService(
         calendar_id=settings.GOOGLE_CALENDAR_ID,
         service_account_file=settings.GOOGLE_SERVICE_ACCOUNT_FILE,
     )
 
     scheduler = AsyncIOScheduler(timezone=settings.TIMEZONE)
-    reminder_service = ReminderService(scheduler, bot, settings.DATABASE_PATH)
+    reminder_service = ReminderService(
+        scheduler=scheduler,
+        bot=bot,
+        db_path=settings.DATABASE_PATH,
+        calendar=calendar,
+        admin_ids=settings.admin_ids,
+        cancellation_group_id=settings.CANCELLATION_GROUP_ID,
+    )
 
     dp = Dispatcher(storage=MemoryStorage())
 
@@ -45,6 +56,8 @@ async def main() -> None:
     dp["admin_ids"] = settings.admin_ids
     dp["therapist_name"] = settings.THERAPIST_NAME
     dp["location"] = settings.LOCATION
+    dp["cancellation_group_id"] = settings.CANCELLATION_GROUP_ID
+    dp["bot_username"] = bot_username
 
     # DB middleware: opens a connection per request
     dp.message.middleware(DatabaseMiddleware(settings.DATABASE_PATH))
@@ -55,7 +68,7 @@ async def main() -> None:
     @dp.errors()
     async def error_handler(event: ErrorEvent) -> bool:
         if isinstance(event.exception, TelegramBadRequest) and "message is not modified" in str(event.exception):
-            return True  # silently ignore — message content was already the same
+            return True  # silently ignore
         logger.error("Unhandled error: %s", event.exception, exc_info=event.exception)
         return False
 
@@ -70,7 +83,12 @@ async def main() -> None:
     except Exception as e:
         logger.warning("Google Calendar NOT connected: %s", e)
 
-    logger.info("Bot started. Admin IDs: %s", settings.admin_ids)
+    logger.info(
+        "Bot started. Username: @%s | Admin IDs: %s | Group: %s",
+        bot_username,
+        settings.admin_ids,
+        settings.CANCELLATION_GROUP_ID or "not set",
+    )
     try:
         await dp.start_polling(bot, skip_updates=True)
     finally:

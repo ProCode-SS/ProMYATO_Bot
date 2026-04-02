@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiosqlite
 from aiogram import Bot, F, Router
@@ -9,6 +9,7 @@ from bot.keyboards.client_kb import cancel_confirm_keyboard, main_menu_keyboard,
 from bot.models.database import get_booking, get_client_by_telegram_id, get_client_upcoming_bookings
 from bot.services.booking_service import cancel_existing_booking
 from bot.services.calendar_service import CalendarService
+from bot.services.group_notify import notify_group_cancellation
 from bot.services.ics_generator import generate_ics
 from bot.services.reminder_service import ReminderService
 from bot.states.booking import MyBookingsStates
@@ -44,9 +45,10 @@ async def my_bookings(
     lines = [MY_BOOKINGS_HEADER]
     for b in bookings:
         start_kyiv = utc_to_kyiv(datetime.fromisoformat(b["start_time"]))
+        confirmed = " ✅" if b.get("confirmed_at") else ""
         lines.append(
             f"\n{format_date_uk(start_kyiv.date(), MONTHS_UK)} "
-            f"{format_time(start_kyiv.time())} — {b['service_name']}"
+            f"{format_time(start_kyiv.time())} — {b['service_name']}{confirmed}"
         )
 
     await state.set_state(MyBookingsStates.view)
@@ -121,6 +123,7 @@ async def confirm_cancel(
     reminder_service: ReminderService,
     bot: Bot,
     admin_ids: list[int],
+    cancellation_group_id: str,
 ) -> None:
     booking_id = int(call.data.split(":")[1])
     client = await get_client_by_telegram_id(db, call.from_user.id)
@@ -135,14 +138,30 @@ async def confirm_cancel(
 
         start_kyiv = utc_to_kyiv(datetime.fromisoformat(booking["start_time"]))
         name = f"{booking['first_name']} {booking.get('last_name') or ''}".strip()
+        date_label = format_date_uk(start_kyiv.date(), MONTHS_UK)
+        time_label = format_time(start_kyiv.time())
+
         cancel_text = CANCEL_BOOKING_ADMIN.format(
             client=name,
             service=booking["service_name"],
-            date=format_date_uk(start_kyiv.date(), MONTHS_UK),
-            time=format_time(start_kyiv.time()),
+            date=date_label,
+            time=time_label,
         )
         for aid in admin_ids:
             await bot.send_message(chat_id=aid, text=cancel_text)
+
+        # Determine urgency: confirmed + less than 12h until appointment
+        now = datetime.now(timezone.utc)
+        start_utc = datetime.fromisoformat(booking["start_time"])
+        if not start_utc.tzinfo:
+            from zoneinfo import ZoneInfo
+            start_utc = start_utc.replace(tzinfo=ZoneInfo("UTC"))
+        hours_until = (start_utc - now).total_seconds() / 3600
+        is_urgent = bool(booking.get("confirmed_at")) and hours_until < 12
+
+        await notify_group_cancellation(
+            bot, db, cancellation_group_id, booking, is_urgent=is_urgent
+        )
     else:
         await call.message.edit_text(
             "Не вдалось скасувати запис.", reply_markup=main_menu_keyboard()

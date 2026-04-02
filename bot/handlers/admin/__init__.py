@@ -2,7 +2,7 @@ from aiogram import Router
 from aiogram.filters import Filter
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
-from bot.handlers.admin import bookings, manual_booking, schedule, services
+from bot.handlers.admin import bookings, manual_booking, schedule, services, vip
 
 
 class AdminFilter(Filter):
@@ -21,5 +21,6 @@ def get_admin_router() -> Router:
     router.include_router(schedule.router)
     router.include_router(bookings.router)
     router.include_router(manual_booking.router)
+    router.include_router(vip.router)
 
     return router

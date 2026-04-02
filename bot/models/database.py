@@ -41,6 +41,8 @@ async def init_db(db_path: str) -> None:
                 status TEXT DEFAULT 'confirmed',
                 reminder_24h_sent BOOLEAN DEFAULT 0,
                 reminder_2h_sent BOOLEAN DEFAULT 0,
+                confirmed_at TIMESTAMP,
+                reminder_24h_sent_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 cancelled_at TIMESTAMP
             );
@@ -55,9 +57,48 @@ async def init_db(db_path: str) -> None:
                 date DATE NOT NULL UNIQUE,
                 reason TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS vip_clients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER REFERENCES clients(id),
+                phone TEXT NOT NULL UNIQUE,
+                notes TEXT,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS available_group_slots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service_id INTEGER NOT NULL REFERENCES services(id),
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                group_message_id INTEGER,
+                group_chat_id INTEGER,
+                is_booked BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS pending_slot_claims (
+                telegram_user_id INTEGER PRIMARY KEY,
+                slot_id INTEGER NOT NULL REFERENCES available_group_slots(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
+        await _migrate_existing_db(db)
         await _seed_default_settings(db)
         await db.commit()
+
+
+async def _migrate_existing_db(db: aiosqlite.Connection) -> None:
+    """Add new columns to existing DB tables if they don't exist yet."""
+    new_booking_cols = [
+        ("confirmed_at", "TIMESTAMP"),
+        ("reminder_24h_sent_at", "TIMESTAMP"),
+    ]
+    async with db.execute("PRAGMA table_info(bookings)") as cur:
+        existing = {row[1] for row in await cur.fetchall()}
+    for col, col_type in new_booking_cols:
+        if col not in existing:
+            await db.execute(f"ALTER TABLE bookings ADD COLUMN {col} {col_type}")
 
 
 async def _seed_default_settings(db: aiosqlite.Connection) -> None:
@@ -195,6 +236,36 @@ async def get_client_by_telegram_id(
     ) as cur:
         row = await cur.fetchone()
         return dict(row) if row else None
+
+
+async def get_client_by_phone(
+    db: aiosqlite.Connection, phone: str
+) -> Optional[dict]:
+    phone = normalize_phone(phone)
+    async with db.execute(
+        "SELECT * FROM clients WHERE phone = ? AND telegram_id > 0", (phone,)
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def search_clients_by_name(
+    db: aiosqlite.Connection, query: str
+) -> list[dict]:
+    q = f"%{query}%"
+    async with db.execute(
+        """
+        SELECT c.*, v.id as vip_id
+        FROM clients c
+        LEFT JOIN vip_clients v ON v.client_id = c.id
+        WHERE (c.first_name LIKE ? OR c.last_name LIKE ?) AND c.telegram_id > 0
+        ORDER BY c.first_name, c.last_name
+        LIMIT 20
+        """,
+        (q, q),
+    ) as cur:
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
 
 # --- Services ---
@@ -368,16 +439,56 @@ async def mark_reminder_sent(
     await db.commit()
 
 
+async def set_reminder_24h_sent_at(
+    db: aiosqlite.Connection, booking_id: int, sent_at: str
+) -> None:
+    await db.execute(
+        "UPDATE bookings SET reminder_24h_sent_at = ? WHERE id = ?",
+        (sent_at, booking_id),
+    )
+    await db.commit()
+
+
+async def confirm_booking_by_reminder(
+    db: aiosqlite.Connection, booking_id: int, confirmed_at: str
+) -> None:
+    await db.execute(
+        "UPDATE bookings SET confirmed_at = ? WHERE id = ? AND status = 'confirmed'",
+        (confirmed_at, booking_id),
+    )
+    await db.commit()
+
+
 async def get_pending_reminders(db: aiosqlite.Connection) -> list[dict]:
     async with db.execute(
         """
         SELECT b.id, b.start_time, b.reminder_24h_sent, b.reminder_2h_sent,
+               b.confirmed_at, b.reminder_24h_sent_at,
                c.telegram_id, s.name as service_name
         FROM bookings b
         JOIN clients c ON b.client_id = c.id
         JOIN services s ON b.service_id = s.id
         WHERE b.status = 'confirmed'
           AND b.start_time > datetime('now')
+        """
+    ) as cur:
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_unconfirmed_past_deadline(db: aiosqlite.Connection) -> list[dict]:
+    """Bookings where 24h reminder was sent 12+ hours ago but not confirmed."""
+    async with db.execute(
+        """
+        SELECT b.id, b.start_time, b.reminder_24h_sent_at,
+               c.telegram_id, s.name as service_name
+        FROM bookings b
+        JOIN clients c ON b.client_id = c.id
+        JOIN services s ON b.service_id = s.id
+        WHERE b.status = 'confirmed'
+          AND b.confirmed_at IS NULL
+          AND b.reminder_24h_sent_at IS NOT NULL
+          AND datetime(b.reminder_24h_sent_at, '+12 hours') <= datetime('now')
         """
     ) as cur:
         rows = await cur.fetchall()
@@ -412,3 +523,181 @@ async def is_day_off(db: aiosqlite.Connection, date: str) -> bool:
         "SELECT 1 FROM days_off WHERE date = ?", (date,)
     ) as cur:
         return await cur.fetchone() is not None
+
+
+# --- VIP clients ---
+
+async def add_vip_client(
+    db: aiosqlite.Connection,
+    phone: str,
+    client_id: Optional[int] = None,
+    notes: Optional[str] = None,
+) -> int:
+    phone = normalize_phone(phone)
+    async with db.execute(
+        """
+        INSERT OR IGNORE INTO vip_clients (phone, client_id, notes)
+        VALUES (?, ?, ?)
+        """,
+        (phone, client_id, notes),
+    ) as cur:
+        await db.commit()
+        if cur.lastrowid:
+            return cur.lastrowid
+    async with db.execute(
+        "SELECT id FROM vip_clients WHERE phone = ?", (phone,)
+    ) as cur:
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+
+async def get_vip_by_phone(
+    db: aiosqlite.Connection, phone: str
+) -> Optional[dict]:
+    phone = normalize_phone(phone)
+    async with db.execute(
+        """
+        SELECT v.*, c.first_name, c.last_name, c.telegram_id
+        FROM vip_clients v
+        LEFT JOIN clients c ON v.client_id = c.id
+        WHERE v.phone = ?
+        """,
+        (phone,),
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def get_all_vips(db: aiosqlite.Connection) -> list[dict]:
+    async with db.execute(
+        """
+        SELECT v.*, c.first_name, c.last_name, c.telegram_id
+        FROM vip_clients v
+        LEFT JOIN clients c ON v.client_id = c.id
+        ORDER BY v.added_at
+        """
+    ) as cur:
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def remove_vip_client(db: aiosqlite.Connection, vip_id: int) -> None:
+    await db.execute("DELETE FROM vip_clients WHERE id = ?", (vip_id,))
+    await db.commit()
+
+
+async def link_vip_to_client(
+    db: aiosqlite.Connection, phone: str, client_id: int
+) -> None:
+    """When client registers, link their VIP record to their client_id."""
+    phone = normalize_phone(phone)
+    await db.execute(
+        "UPDATE vip_clients SET client_id = ? WHERE phone = ? AND client_id IS NULL",
+        (client_id, phone),
+    )
+    await db.commit()
+
+
+async def is_client_vip(db: aiosqlite.Connection, phone: str) -> bool:
+    phone = normalize_phone(phone)
+    async with db.execute(
+        "SELECT 1 FROM vip_clients WHERE phone = ?", (phone,)
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+# --- Group slots ---
+
+async def create_group_slot(
+    db: aiosqlite.Connection,
+    service_id: int,
+    start_time: str,
+    end_time: str,
+) -> int:
+    async with db.execute(
+        """
+        INSERT INTO available_group_slots (service_id, start_time, end_time)
+        VALUES (?, ?, ?)
+        """,
+        (service_id, start_time, end_time),
+    ) as cur:
+        await db.commit()
+        return cur.lastrowid
+
+
+async def update_group_slot_message(
+    db: aiosqlite.Connection,
+    slot_id: int,
+    group_message_id: int,
+    group_chat_id: int,
+) -> None:
+    await db.execute(
+        "UPDATE available_group_slots SET group_message_id = ?, group_chat_id = ? WHERE id = ?",
+        (group_message_id, group_chat_id, slot_id),
+    )
+    await db.commit()
+
+
+async def get_group_slot(
+    db: aiosqlite.Connection, slot_id: int
+) -> Optional[dict]:
+    async with db.execute(
+        """
+        SELECT gs.*, s.name as service_name, s.price, s.duration_minutes
+        FROM available_group_slots gs
+        JOIN services s ON gs.service_id = s.id
+        WHERE gs.id = ?
+        """,
+        (slot_id,),
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def mark_group_slot_booked(db: aiosqlite.Connection, slot_id: int) -> None:
+    await db.execute(
+        "UPDATE available_group_slots SET is_booked = 1 WHERE id = ?", (slot_id,)
+    )
+    await db.commit()
+
+
+async def create_pending_slot_claim(
+    db: aiosqlite.Connection, telegram_user_id: int, slot_id: int
+) -> None:
+    await db.execute(
+        """
+        INSERT OR REPLACE INTO pending_slot_claims (telegram_user_id, slot_id)
+        VALUES (?, ?)
+        """,
+        (telegram_user_id, slot_id),
+    )
+    await db.commit()
+
+
+async def get_pending_slot_claim(
+    db: aiosqlite.Connection, telegram_user_id: int
+) -> Optional[dict]:
+    async with db.execute(
+        """
+        SELECT psc.*, gs.service_id, gs.start_time, gs.end_time,
+               gs.is_booked, gs.group_message_id, gs.group_chat_id,
+               s.name as service_name, s.duration_minutes, s.price
+        FROM pending_slot_claims psc
+        JOIN available_group_slots gs ON psc.slot_id = gs.id
+        JOIN services s ON gs.service_id = s.id
+        WHERE psc.telegram_user_id = ?
+        """,
+        (telegram_user_id,),
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def delete_pending_slot_claim(
+    db: aiosqlite.Connection, telegram_user_id: int
+) -> None:
+    await db.execute(
+        "DELETE FROM pending_slot_claims WHERE telegram_user_id = ?",
+        (telegram_user_id,),
+    )
+    await db.commit()
