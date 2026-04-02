@@ -6,7 +6,6 @@
 # Local databases
 data/*.db
 **/data/*.db
-
 monobank-acquiring
 
 # Python cache artifacts
