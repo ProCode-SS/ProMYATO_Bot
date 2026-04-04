@@ -10,7 +10,7 @@ from aiogram import Bot
 
 from bot.keyboards.client_kb import group_book_keyboard
 from bot.models.database import create_group_slot, update_group_slot_message
-from bot.utils.datetime_helpers import format_date_uk, format_time, utc_to_kyiv
+from bot.utils.datetime_helpers import format_date_uk, format_time, kyiv_now, utc_to_kyiv
 from bot.utils.texts import (
     GROUP_SLOT_AVAILABLE,
     GROUP_SLOT_AVAILABLE_URGENT,
@@ -57,11 +57,15 @@ async def notify_group_cancellation(
         end_time=booking["end_time"],
     )
 
+    now_hour = kyiv_now().hour
+    silent = now_hour >= 23 or now_hour < 8
+
     try:
         sent = await bot.send_message(
             chat_id=int(cancellation_group_id),
             text=text,
             reply_markup=group_book_keyboard(slot_id),
+            disable_notification=silent,
         )
         await update_group_slot_message(db, slot_id, sent.message_id, sent.chat.id)
     except Exception as e:
