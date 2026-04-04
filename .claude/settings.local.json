@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ':*)",
+      "Bash(python -m py_compile bot/models/database.py bot/keyboards/admin_kb.py bot/handlers/client/booking.py bot/handlers/admin/bookings.py bot/handlers/client/my_bookings.py)",
+      "Bash(python -m py_compile bot/handlers/admin/bookings.py)"
+    ]
+  }
+}

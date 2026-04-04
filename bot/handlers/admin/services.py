@@ -4,8 +4,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.keyboards.admin_kb import admin_menu_keyboard, services_list_keyboard
-from bot.models.database import add_service, get_all_services, toggle_service
+from bot.keyboards.admin_kb import admin_menu_keyboard, service_delete_confirm_keyboard, services_list_keyboard
+from bot.models.database import (
+    add_service,
+    delete_service,
+    get_all_services,
+    has_active_bookings_for_service,
+    toggle_service,
+)
 from bot.states.booking import AdminServiceStates
 from bot.utils.texts import (
     NO_SERVICES,
@@ -42,6 +48,49 @@ async def toggle_service_handler(call: CallbackQuery, db: aiosqlite.Connection) 
     services = await get_all_services(db)
     await call.message.edit_text(SERVICES_LIST, reply_markup=services_list_keyboard(services))
     await call.answer(SERVICE_TOGGLED)
+
+
+@router.callback_query(F.data.startswith("admin:del_svc:"))
+async def delete_service_confirm(call: CallbackQuery, db: aiosqlite.Connection) -> None:
+    service_id = int(call.data.split(":")[-1])
+    if await has_active_bookings_for_service(db, service_id):
+        await call.answer(
+            "Не можна видалити — є активні записи для цієї послуги.",
+            show_alert=True,
+        )
+        return
+    services = await get_all_services(db)
+    svc = next((s for s in services if s["id"] == service_id), None)
+    name = svc["name"] if svc else f"#{service_id}"
+    await call.message.edit_text(
+        f"Видалити послугу?\n\n<b>{name}</b>",
+        reply_markup=service_delete_confirm_keyboard(service_id),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("admin:confirm_del_svc:"))
+async def delete_service_execute(call: CallbackQuery, db: aiosqlite.Connection) -> None:
+    service_id = int(call.data.split(":")[-1])
+    if await has_active_bookings_for_service(db, service_id):
+        await call.answer(
+            "Не можна видалити — є активні записи для цієї послуги.",
+            show_alert=True,
+        )
+        services = await get_all_services(db)
+        await call.message.edit_text(SERVICES_LIST, reply_markup=services_list_keyboard(services))
+        return
+    await delete_service(db, service_id)
+    await call.answer("Послугу видалено.", show_alert=True)
+    services = await get_all_services(db)
+    if not services:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="Додати послугу", callback_data="admin:add_service")
+        kb.button(text="Назад", callback_data="admin:menu")
+        kb.adjust(1)
+        await call.message.edit_text(NO_SERVICES, reply_markup=kb.as_markup())
+    else:
+        await call.message.edit_text(SERVICES_LIST, reply_markup=services_list_keyboard(services))
 
 
 @router.callback_query(F.data == "admin:add_service")

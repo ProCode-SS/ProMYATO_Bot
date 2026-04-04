@@ -336,6 +336,19 @@ async def toggle_service(db: aiosqlite.Connection, service_id: int) -> None:
     await db.commit()
 
 
+async def delete_service(db: aiosqlite.Connection, service_id: int) -> None:
+    await db.execute("DELETE FROM services WHERE id = ?", (service_id,))
+    await db.commit()
+
+
+async def has_active_bookings_for_service(db: aiosqlite.Connection, service_id: int) -> bool:
+    async with db.execute(
+        "SELECT 1 FROM bookings WHERE service_id = ? AND status IN ('confirmed', 'pending_approval') LIMIT 1",
+        (service_id,),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
 # --- Bookings ---
 
 async def create_booking(

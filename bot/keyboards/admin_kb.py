@@ -23,19 +23,24 @@ def services_list_keyboard(services: list[dict]) -> InlineKeyboardMarkup:
     for svc in services:
         status = "✅" if svc["is_active"] else "❌"
         price_str = f" — {svc['price']}₴" if svc.get("price") else ""
+        approval_mark = " 🕐" if svc.get("requires_approval") else ""
+        label = f"{status} {svc['name']} {svc['duration_minutes']}хв{price_str}{approval_mark}"
+        rows.append([InlineKeyboardButton(text=label, callback_data="noop")])
         rows.append([
-            InlineKeyboardButton(
-                text=f"{status} {svc['name']} {svc['duration_minutes']}хв{price_str}",
-                callback_data="noop",
-            ),
-            InlineKeyboardButton(
-                text="Вкл/Викл",
-                callback_data=f"admin:toggle_svc:{svc['id']}",
-            ),
+            InlineKeyboardButton(text="Вкл/Викл", callback_data=f"admin:toggle_svc:{svc['id']}"),
+            InlineKeyboardButton(text="🗑 Видалити", callback_data=f"admin:del_svc:{svc['id']}"),
         ])
-    rows.append([InlineKeyboardButton(text="Додати послугу", callback_data="admin:add_service")])
-    rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:menu")])
+    rows.append([InlineKeyboardButton(text="➕ Додати послугу", callback_data="admin:add_service")])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="admin:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def service_delete_confirm_keyboard(service_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Так, видалити", callback_data=f"admin:confirm_del_svc:{service_id}")
+    kb.button(text="← Назад", callback_data="admin:services")
+    kb.adjust(1)
+    return kb.as_markup()
 
 
 def schedule_keyboard() -> InlineKeyboardMarkup:
