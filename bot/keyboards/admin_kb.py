@@ -2,15 +2,18 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def admin_menu_keyboard() -> InlineKeyboardMarkup:
+def admin_menu_keyboard(bookings_open: bool = True) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📊 Записи на сьогодні", callback_data="admin:today")
     kb.button(text="📅 Записи на тиждень", callback_data="admin:week")
+    kb.button(text="⏳ Запити на схвалення", callback_data="admin:pending")
     kb.button(text="➕ Новий запис", callback_data="admin:new_booking")
     kb.button(text="👑 VIP клієнти", callback_data="admin:vip")
     kb.button(text="🛠 Послуги", callback_data="admin:services")
     kb.button(text="⏰ Графік роботи", callback_data="admin:schedule")
     kb.button(text="🚫 Вихідні дні", callback_data="admin:days_off")
+    toggle_text = "🔒 Закрити запис для клієнтів" if bookings_open else "🔓 Відкрити запис для клієнтів"
+    kb.button(text=toggle_text, callback_data="admin:toggle_bookings")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -145,6 +148,14 @@ def vip_confirm_phone_keyboard(phone: str) -> InlineKeyboardMarkup:
     kb.button(text="✅ Так, додати", callback_data=f"vip:confirm_phone:{encoded}")
     kb.button(text="← Скасувати", callback_data="admin:vip")
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def offhours_approve_keyboard(booking_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Підтвердити", callback_data=f"offhours:approve:{booking_id}")
+    kb.button(text="❌ Відхилити", callback_data=f"offhours:reject:{booking_id}")
+    kb.adjust(2)
     return kb.as_markup()
 
 

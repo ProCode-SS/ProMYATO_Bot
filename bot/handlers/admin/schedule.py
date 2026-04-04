@@ -9,7 +9,7 @@ from bot.keyboards.admin_kb import (
     schedule_keyboard,
     workdays_keyboard,
 )
-from bot.models.database import add_day_off, get_days_off, get_setting, remove_day_off, set_setting
+from bot.models.database import add_day_off, get_days_off, get_setting, is_bookings_open, remove_day_off, set_setting
 from bot.states.booking import AdminScheduleStates
 from bot.utils.datetime_helpers import parse_date
 from bot.utils.texts import (
@@ -162,8 +162,8 @@ async def toggle_workday(call: CallbackQuery, db: aiosqlite.Connection) -> None:
 
 
 @router.callback_query(F.data == "admin:save_workdays")
-async def save_workdays(call: CallbackQuery) -> None:
-    await call.message.edit_text(SCHEDULE_SAVED, reply_markup=admin_menu_keyboard())
+async def save_workdays(call: CallbackQuery, db: aiosqlite.Connection) -> None:
+    await call.message.edit_text(SCHEDULE_SAVED, reply_markup=admin_menu_keyboard(await is_bookings_open(db)))
     await call.answer()
 
 

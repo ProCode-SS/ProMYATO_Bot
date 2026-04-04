@@ -198,16 +198,27 @@ def my_bookings_keyboard(bookings: list[dict]) -> InlineKeyboardMarkup:
     for b in bookings:
         start_kyiv = utc_to_kyiv(datetime.fromisoformat(b["start_time"]))
         day_abbr = WEEKDAY_HEADERS[start_kyiv.weekday()]
-        confirmed = " ✅" if b.get("confirmed_at") else ""
-        label = (
-            f"{start_kyiv.day} {MONTHS_UK[start_kyiv.month]}, {day_abbr} "
-            f"{format_time(start_kyiv.time())} — {b['service_name']}{confirmed}"
-        )
-        rows.append([InlineKeyboardButton(text=label, callback_data="noop")])
-        rows.append([
-            InlineKeyboardButton(text="📅 В календар", callback_data=f"ics:{b['id']}"),
-            InlineKeyboardButton(text="❌ Скасувати", callback_data=f"cancel:{b['id']}"),
-        ])
+        is_pending = b.get("status") == "pending_approval"
+        if is_pending:
+            label = (
+                f"⏳ {start_kyiv.day} {MONTHS_UK[start_kyiv.month]}, {day_abbr} "
+                f"{format_time(start_kyiv.time())} — {b['service_name']}"
+            )
+            rows.append([InlineKeyboardButton(text=label, callback_data="noop")])
+            rows.append([
+                InlineKeyboardButton(text="❌ Скасувати запит", callback_data=f"cancel:{b['id']}"),
+            ])
+        else:
+            confirmed = " ✅" if b.get("confirmed_at") else ""
+            label = (
+                f"{start_kyiv.day} {MONTHS_UK[start_kyiv.month]}, {day_abbr} "
+                f"{format_time(start_kyiv.time())} — {b['service_name']}{confirmed}"
+            )
+            rows.append([InlineKeyboardButton(text=label, callback_data="noop")])
+            rows.append([
+                InlineKeyboardButton(text="📅 В календар", callback_data=f"ics:{b['id']}"),
+                InlineKeyboardButton(text="❌ Скасувати", callback_data=f"cancel:{b['id']}"),
+            ])
     rows.append([InlineKeyboardButton(text="← Назад", callback_data="menu:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

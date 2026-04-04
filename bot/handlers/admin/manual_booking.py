@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.keyboards.admin_kb import admin_menu_keyboard
 from bot.keyboards.client_kb import confirm_keyboard, dates_keyboard, services_keyboard, times_keyboard
-from bot.models.database import get_active_services, get_service, get_setting, upsert_virtual_client
+from bot.models.database import get_active_services, get_service, get_setting, is_bookings_open, upsert_virtual_client
 from bot.services.booking_service import (
     create_new_booking,
     get_admin_only_dates,
@@ -84,11 +84,11 @@ async def admin_select_service(
                 db, calendar, from_date, to_date, service["duration_minutes"]
             )
         except Exception:
-            await call.message.edit_text(ERROR_GOOGLE_CALENDAR, reply_markup=admin_menu_keyboard())
+            await call.message.edit_text(ERROR_GOOGLE_CALENDAR, reply_markup=admin_menu_keyboard(await is_bookings_open(db)))
             await state.clear()
             return
         if not available_dates:
-            await call.message.edit_text(NO_DATES_AVAILABLE, reply_markup=admin_menu_keyboard())
+            await call.message.edit_text(NO_DATES_AVAILABLE, reply_markup=admin_menu_keyboard(await is_bookings_open(db)))
             await state.clear()
             return
 
@@ -252,7 +252,7 @@ async def admin_confirm_booking(
     )
     if not booking_id:
         await call.message.edit_text(
-            "Цей час вже зайнятий. Оберіть інший.", reply_markup=admin_menu_keyboard()
+            "Цей час вже зайнятий. Оберіть інший.", reply_markup=admin_menu_keyboard(await is_bookings_open(db))
         )
         await state.clear()
         await call.answer()
@@ -289,13 +289,13 @@ async def admin_confirm_booking(
         for aid in admin_ids:
             await bot.send_message(chat_id=aid, text=urgent_text)
 
-    await call.message.edit_text(ADMIN_BOOKING_CREATED, reply_markup=admin_menu_keyboard())
+    await call.message.edit_text(ADMIN_BOOKING_CREATED, reply_markup=admin_menu_keyboard(await is_bookings_open(db)))
     await state.clear()
     await call.answer()
 
 
 @router.callback_query(AdminBookingStates.confirm, F.data == "confirm:no")
-async def admin_cancel_new_booking(call: CallbackQuery, state: FSMContext) -> None:
+async def admin_cancel_new_booking(call: CallbackQuery, state: FSMContext, db: aiosqlite.Connection) -> None:
     await state.clear()
-    await call.message.edit_text("Скасовано.", reply_markup=admin_menu_keyboard())
+    await call.message.edit_text("Скасовано.", reply_markup=admin_menu_keyboard(await is_bookings_open(db)))
     await call.answer()

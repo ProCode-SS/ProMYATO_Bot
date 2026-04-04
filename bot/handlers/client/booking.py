@@ -5,6 +5,7 @@ from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery
 
+from bot.keyboards.admin_kb import offhours_approve_keyboard
 from bot.keyboards.client_kb import (
     confirm_keyboard,
     dates_keyboard,
@@ -12,7 +13,14 @@ from bot.keyboards.client_kb import (
     services_keyboard,
     times_keyboard,
 )
-from bot.models.database import get_active_services, get_client_by_telegram_id, get_service
+from bot.models.database import (
+    create_booking,
+    get_active_services,
+    get_client_by_telegram_id,
+    get_service,
+    get_setting,
+    is_bookings_open,
+)
 from bot.services.booking_service import (
     create_new_booking,
     get_available_dates,
@@ -25,7 +33,9 @@ from bot.states.booking import BookingStates
 from bot.utils.datetime_helpers import (
     format_date_uk,
     format_time,
+    generate_time_slots,
     kyiv_now,
+    kyiv_to_utc,
     make_kyiv_dt,
     utc_to_kyiv,
 )
@@ -33,6 +43,7 @@ from bot.utils.datetime_helpers import kyiv_now
 from bot.utils.texts import (
     BOOKING_CONFIRM,
     BOOKING_CONFIRMED,
+    BOOKINGS_CLOSED,
     ERROR_GENERAL,
     ERROR_GOOGLE_CALENDAR,
     ICS_FILENAME,
@@ -40,6 +51,9 @@ from bot.utils.texts import (
     NEW_BOOKING_ADMIN,
     NO_DATES_AVAILABLE,
     NO_SLOTS_AVAILABLE,
+    OFFHOURS_BOOKING_CONFIRM,
+    OFFHOURS_PENDING_SENT,
+    OFFHOURS_REQUEST_ADMIN,
     SELECT_DATE,
     SELECT_SERVICE,
     SELECT_TIME,
@@ -54,6 +68,9 @@ router = Router()
 async def start_booking(
     call: CallbackQuery, state: FSMContext, db: aiosqlite.Connection
 ) -> None:
+    if not await is_bookings_open(db):
+        await call.answer(BOOKINGS_CLOSED, show_alert=True)
+        return
     services = await get_active_services(db)
     if not services:
         await call.answer("Послуги ще не додані.", show_alert=True)
@@ -76,30 +93,42 @@ async def select_service(
         await call.answer("Послугу не знайдено.", show_alert=True)
         return
 
-    await call.message.edit_text("Завантажую доступні дати...")
-    await call.answer()
-
     now = kyiv_now()
     from_date = now.date()
     to_date = from_date + timedelta(days=60)
 
-    try:
-        available_dates = await get_available_dates(
-            db, calendar, from_date, to_date, service["duration_minutes"]
-        )
-    except Exception:
-        await call.message.edit_text(ERROR_GOOGLE_CALENDAR, reply_markup=main_menu_keyboard())
-        await state.clear()
-        return
+    requires_approval = bool(service.get("requires_approval"))
 
-    if not available_dates:
-        await call.message.edit_text(NO_DATES_AVAILABLE, reply_markup=main_menu_keyboard())
-        await state.clear()
-        return
+    if requires_approval:
+        # All dates available — no calendar check needed
+        await call.answer()
+        all_dates: set[date] = set()
+        current = from_date
+        while current <= to_date:
+            all_dates.add(current)
+            current += timedelta(days=1)
+        available_dates = all_dates
+    else:
+        await call.message.edit_text("Завантажую доступні дати...")
+        await call.answer()
+        try:
+            available_dates = await get_available_dates(
+                db, calendar, from_date, to_date, service["duration_minutes"]
+            )
+        except Exception:
+            await call.message.edit_text(ERROR_GOOGLE_CALENDAR, reply_markup=main_menu_keyboard())
+            await state.clear()
+            return
+
+        if not available_dates:
+            await call.message.edit_text(NO_DATES_AVAILABLE, reply_markup=main_menu_keyboard())
+            await state.clear()
+            return
 
     year, month = now.year, now.month
     await state.update_data(
         service_id=service_id,
+        requires_approval=requires_approval,
         year=year,
         month=month,
         available_dates=[d.isoformat() for d in available_dates],
@@ -145,7 +174,14 @@ async def select_date(
     data = await state.get_data()
     service = await get_service(db, data["service_id"])
 
-    slots = await get_available_slots(db, calendar, selected_date, service["duration_minutes"])
+    if data.get("requires_approval"):
+        interval = int(await get_setting(db, "slot_interval_minutes") or "30")
+        slots = generate_time_slots(
+            selected_date, 7, 23, interval, service["duration_minutes"], 0
+        )
+    else:
+        slots = await get_available_slots(db, calendar, selected_date, service["duration_minutes"])
+
     if not slots:
         await call.answer(NO_SLOTS_AVAILABLE, show_alert=True)
         return
@@ -176,14 +212,25 @@ async def select_time(
     end_dt = start_dt + timedelta(minutes=service["duration_minutes"])
     price_str = f"💰 {service['price']}₴" if service.get("price") else "Ціна уточнюється"
 
-    text = BOOKING_CONFIRM.format(
-        service=service["name"],
-        duration=service["duration_minutes"],
-        date=format_date_uk(selected_date, MONTHS_UK),
-        time_start=format_time(selected_time),
-        time_end=format_time(end_dt.time()),
-        price=price_str,
-    )
+    if data.get("requires_approval"):
+        text = OFFHOURS_BOOKING_CONFIRM.format(
+            service=service["name"],
+            duration=service["duration_minutes"],
+            date=format_date_uk(selected_date, MONTHS_UK),
+            time_start=format_time(selected_time),
+            time_end=format_time(end_dt.time()),
+            price=price_str,
+        )
+    else:
+        text = BOOKING_CONFIRM.format(
+            service=service["name"],
+            duration=service["duration_minutes"],
+            date=format_date_uk(selected_date, MONTHS_UK),
+            time_start=format_time(selected_time),
+            time_end=format_time(end_dt.time()),
+            price=price_str,
+        )
+
     await state.update_data(selected_time=time_str)
     await state.set_state(BookingStates.confirm)
     await call.message.edit_text(text, reply_markup=confirm_keyboard())
@@ -213,6 +260,45 @@ async def confirm_booking(
         await call.answer(ERROR_GENERAL, show_alert=True)
         return
 
+    # --- Off-hours: create pending booking, notify admin ---
+    if data.get("requires_approval"):
+        start_dt = make_kyiv_dt(selected_date, selected_time)
+        end_dt = start_dt + timedelta(minutes=service["duration_minutes"])
+
+        booking_id = await create_booking(
+            db,
+            client_id=client["id"],
+            service_id=service["id"],
+            start_time=kyiv_to_utc(start_dt).isoformat(),
+            end_time=kyiv_to_utc(end_dt).isoformat(),
+            status="pending_approval",
+        )
+
+        date_label = format_date_uk(selected_date, MONTHS_UK)
+        time_str = data["selected_time"]
+        phone = client.get("phone") or "—"
+        name = f"{client['first_name']} {client.get('last_name') or ''}".strip()
+
+        request_text = OFFHOURS_REQUEST_ADMIN.format(
+            client=name,
+            service=service["name"],
+            date=date_label,
+            time=time_str,
+            phone=phone,
+        )
+        for aid in admin_ids:
+            await bot.send_message(
+                chat_id=aid,
+                text=request_text,
+                reply_markup=offhours_approve_keyboard(booking_id),
+            )
+
+        await call.message.edit_text(OFFHOURS_PENDING_SENT, reply_markup=main_menu_keyboard())
+        await state.clear()
+        await call.answer()
+        return
+
+    # --- Regular booking ---
     booking_id = await create_new_booking(
         db, calendar, client["id"], service, selected_date, selected_time
     )
@@ -313,7 +399,15 @@ async def back_to_time(
     data = await state.get_data()
     selected_date = date.fromisoformat(data["selected_date"])
     service = await get_service(db, data["service_id"])
-    slots = await get_available_slots(db, calendar, selected_date, service["duration_minutes"])
+
+    if data.get("requires_approval"):
+        interval = int(await get_setting(db, "slot_interval_minutes") or "30")
+        slots = generate_time_slots(
+            selected_date, 7, 23, interval, service["duration_minutes"], 0
+        )
+    else:
+        slots = await get_available_slots(db, calendar, selected_date, service["duration_minutes"])
+
     date_label = format_date_uk(selected_date, MONTHS_UK)
     await state.set_state(BookingStates.select_time)
     await call.message.edit_text(

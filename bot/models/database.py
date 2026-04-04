@@ -28,6 +28,7 @@ async def init_db(db_path: str) -> None:
                 description TEXT,
                 is_active BOOLEAN DEFAULT 1,
                 admin_only BOOLEAN DEFAULT 0,
+                requires_approval BOOLEAN DEFAULT 0,
                 sort_order INTEGER DEFAULT 0
             );
 
@@ -100,6 +101,18 @@ async def _migrate_existing_db(db: aiosqlite.Connection) -> None:
         if col not in existing:
             await db.execute(f"ALTER TABLE bookings ADD COLUMN {col} {col_type}")
 
+    # Services: add requires_approval column; convert existing admin_only services
+    async with db.execute("PRAGMA table_info(services)") as cur:
+        existing_svc = {row[1] for row in await cur.fetchall()}
+    if "requires_approval" not in existing_svc:
+        await db.execute(
+            "ALTER TABLE services ADD COLUMN requires_approval BOOLEAN DEFAULT 0"
+        )
+        # Convert all existing admin_only services to client-visible + requires_approval
+        await db.execute(
+            "UPDATE services SET admin_only = 0, requires_approval = 1 WHERE admin_only = 1"
+        )
+
 
 async def _seed_default_settings(db: aiosqlite.Connection) -> None:
     defaults = {
@@ -108,6 +121,7 @@ async def _seed_default_settings(db: aiosqlite.Connection) -> None:
         "slot_interval_minutes": "30",
         "break_between_minutes": "30",
         "work_days": "0,1,2,3,4,5",
+        "bookings_open": "1",
     }
     for key, value in defaults.items():
         await db.execute(
@@ -125,24 +139,25 @@ async def seed_default_services(db_path: str) -> None:
                 return
 
         default_services = [
+            # (name, duration, price, desc, admin_only, requires_approval)
             ("Глибокотканинний масаж", 60, 1400,
-             "Спина + ноги. Можливе використання блейдів, банок, перкусійного пістолету", 0),
+             "Спина + ноги. Можливе використання блейдів, банок, перкусійного пістолету", 0, 0),
             ("Глибокотканинний масаж", 90, 1800,
-             "Робота по всьому тілу. Можливе використання блейдів, банок, перкусійного пістолету", 0),
-            ("Лімфодренажний масаж", 60, 1400, "Класичний лімфодренаж", 0),
-            ("Лімфодренажний масаж", 90, 1800, "Класичний + магістральний лімфодренаж", 0),
-            ("Дитячий масаж 40хв (5-12 років)", 40, 900, None, 0),
-            ("Тейпування (1 зона)", 30, 400, None, 0),
-            ("Метод сухої голки", 60, 800, "Точкова міофасціальна робота", 0),
+             "Робота по всьому тілу. Можливе використання блейдів, банок, перкусійного пістолету", 0, 0),
+            ("Лімфодренажний масаж", 60, 1400, "Класичний лімфодренаж", 0, 0),
+            ("Лімфодренажний масаж", 90, 1800, "Класичний + магістральний лімфодренаж", 0, 0),
+            ("Дитячий масаж 40хв (5-12 років)", 40, 900, None, 0, 0),
+            ("Тейпування (1 зона)", 30, 400, None, 0, 0),
+            ("Метод сухої голки", 60, 800, "Точкова міофасціальна робота", 0, 0),
             ("Позаробочий / вихідний день", 60, 2000,
-             "Прийом в позаробочий час або вихідний за домовленістю", 1),
+             "Прийом в позаробочий час або вихідний за домовленістю", 0, 1),
         ]
-        for i, (name, duration, price, desc, admin_only) in enumerate(default_services):
+        for i, (name, duration, price, desc, admin_only, requires_approval) in enumerate(default_services):
             await db.execute(
                 "INSERT INTO services "
-                "(name, duration_minutes, price, description, admin_only, sort_order) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (name, duration, price, desc, admin_only, i),
+                "(name, duration_minutes, price, description, admin_only, requires_approval, sort_order) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (name, duration, price, desc, admin_only, requires_approval, i),
             )
         await db.commit()
 
@@ -330,13 +345,14 @@ async def create_booking(
     start_time: str,
     end_time: str,
     google_event_id: Optional[str] = None,
+    status: str = "confirmed",
 ) -> int:
     async with db.execute(
         """
-        INSERT INTO bookings (client_id, service_id, start_time, end_time, google_event_id)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO bookings (client_id, service_id, start_time, end_time, google_event_id, status)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (client_id, service_id, start_time, end_time, google_event_id),
+        (client_id, service_id, start_time, end_time, google_event_id, status),
     ) as cur:
         await db.commit()
         return cur.lastrowid
@@ -366,7 +382,9 @@ async def get_client_upcoming_bookings(
         SELECT b.*, s.name as service_name, s.duration_minutes, s.price
         FROM bookings b
         JOIN services s ON b.service_id = s.id
-        WHERE b.client_id = ? AND b.status = 'confirmed' AND b.start_time > datetime('now')
+        WHERE b.client_id = ?
+          AND b.status IN ('confirmed', 'pending_approval')
+          AND b.start_time > datetime('now')
         ORDER BY b.start_time
         """,
         (client_id,),
@@ -470,6 +488,55 @@ async def get_pending_reminders(db: aiosqlite.Connection) -> list[dict]:
         JOIN services s ON b.service_id = s.id
         WHERE b.status = 'confirmed'
           AND b.start_time > datetime('now')
+        """
+    ) as cur:
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def is_bookings_open(db: aiosqlite.Connection) -> bool:
+    return (await get_setting(db, "bookings_open") or "1") == "1"
+
+
+async def approve_pending_booking(
+    db: aiosqlite.Connection,
+    booking_id: int,
+    google_event_id: Optional[str] = None,
+) -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        """
+        UPDATE bookings
+        SET status = 'confirmed', confirmed_at = ?,
+            google_event_id = COALESCE(?, google_event_id)
+        WHERE id = ?
+        """,
+        (now, google_event_id, booking_id),
+    )
+    await db.commit()
+
+
+async def reject_pending_booking(db: aiosqlite.Connection, booking_id: int) -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE bookings SET status = 'cancelled', cancelled_at = ? WHERE id = ?",
+        (now, booking_id),
+    )
+    await db.commit()
+
+
+async def get_pending_approval_bookings(db: aiosqlite.Connection) -> list[dict]:
+    async with db.execute(
+        """
+        SELECT b.*, c.first_name, c.last_name, c.phone, c.telegram_id,
+               s.name as service_name, s.duration_minutes
+        FROM bookings b
+        JOIN clients c ON b.client_id = c.id
+        JOIN services s ON b.service_id = s.id
+        WHERE b.status = 'pending_approval'
+        ORDER BY b.created_at
         """
     ) as cur:
         rows = await cur.fetchall()

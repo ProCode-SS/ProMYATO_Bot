@@ -7,7 +7,7 @@ from bot.handlers.admin import get_admin_router
 from bot.handlers.client import booking, confirmation, group_booking, my_bookings, start
 from bot.keyboards.admin_kb import admin_menu_keyboard
 from bot.keyboards.client_kb import main_menu_keyboard, main_reply_keyboard
-from bot.models.database import get_client_by_telegram_id
+from bot.models.database import get_client_by_telegram_id, is_bookings_open
 from bot.utils.texts import ADMIN_BUTTON, ADMIN_MENU, ALREADY_REGISTERED, MAIN_MENU, MENU_BUTTON, NOT_ADMIN
 
 
@@ -39,26 +39,26 @@ def get_main_router(admin_ids: list[int]) -> Router:
         await message.answer(MAIN_MENU, reply_markup=main_menu_keyboard())
 
     @router.message(F.text == ADMIN_BUTTON)
-    async def admin_menu_button(message: Message, state: FSMContext) -> None:
+    async def admin_menu_button(message: Message, state: FSMContext, db) -> None:
         if message.from_user.id not in admin_ids:
             await message.answer(NOT_ADMIN)
             return
         await state.clear()
-        await message.answer(ADMIN_MENU, reply_markup=admin_menu_keyboard())
+        await message.answer(ADMIN_MENU, reply_markup=admin_menu_keyboard(await is_bookings_open(db)))
 
     # ── /admin command ───────────────────────────────────────────────────────
 
     @router.message(Command("admin"))
-    async def admin_cmd(message: Message, state: FSMContext) -> None:
+    async def admin_cmd(message: Message, state: FSMContext, db) -> None:
         if message.from_user.id not in admin_ids:
             await message.answer(NOT_ADMIN)
             return
         await state.clear()
-        await message.answer(ADMIN_MENU, reply_markup=admin_menu_keyboard())
+        await message.answer(ADMIN_MENU, reply_markup=admin_menu_keyboard(await is_bookings_open(db)))
 
     @router.callback_query(F.data == "admin:menu")
-    async def admin_menu_back(call: CallbackQuery) -> None:
-        await call.message.edit_text(ADMIN_MENU, reply_markup=admin_menu_keyboard())
+    async def admin_menu_back(call: CallbackQuery, db) -> None:
+        await call.message.edit_text(ADMIN_MENU, reply_markup=admin_menu_keyboard(await is_bookings_open(db)))
         await call.answer()
 
     @router.callback_query(F.data == "noop")

@@ -29,6 +29,7 @@ from bot.models.database import (
     get_client_by_phone,
     get_service,
     get_vip_by_phone,
+    is_bookings_open,
     remove_vip_client,
     search_clients_by_name,
     upsert_virtual_client,
@@ -480,7 +481,7 @@ async def vip_book_execute(
     elif vip_phone:
         client_id = await upsert_virtual_client(db, client_name, vip_phone)
     else:
-        await call.message.edit_text("Помилка: не знайдено клієнта.", reply_markup=admin_menu_keyboard())
+        await call.message.edit_text("Помилка: не знайдено клієнта.", reply_markup=admin_menu_keyboard(await is_bookings_open(db)))
         await state.clear()
         await call.answer()
         return
@@ -517,7 +518,7 @@ async def vip_book_execute(
 
     await call.message.edit_text(
         VIP_BOOKING_CREATED.format(created=created, total=len(selected)),
-        reply_markup=admin_menu_keyboard(),
+        reply_markup=admin_menu_keyboard(await is_bookings_open(db)),
     )
     await state.clear()
     await call.answer()

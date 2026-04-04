@@ -248,6 +248,56 @@ GROUP_BOOKING_PENDING_TAKEN = (
     "Ви можете записатись на інший час через меню."
 )
 
+# --- Bookings open/closed toggle ---
+BOOKINGS_CLOSED = (
+    "Запис тимчасово недоступний. Спробуйте пізніше або зверніться до майстра."
+)
+BOOKINGS_TOGGLE_CLOSED = "🔒 Запис закрито для клієнтів."
+BOOKINGS_TOGGLE_OPENED = "✅ Запис знову відкрито для клієнтів."
+
+# --- Off-hours (позаробочий) booking flow ---
+OFFHOURS_BOOKING_CONFIRM = (
+    "Підтвердження запиту:\n\n"
+    "{service} ({duration} хв)\n"
+    "{date}\n"
+    "{time_start} — {time_end}\n"
+    "{price}\n\n"
+    "⚠️ Запис поза робочими годинами — набуде чинності лише після підтвердження майстром.\n\n"
+    "Відправити запит?"
+)
+OFFHOURS_PENDING_SENT = (
+    "Ваш запит надіслано! Майстер розгляне та підтвердить або відхилить його. "
+    "Ви отримаєте повідомлення після рішення."
+)
+OFFHOURS_REQUEST_ADMIN = (
+    "🕐 Запит на позаробочий час!\n\n"
+    "{client} — {service}\n"
+    "{date}, {time}\n"
+    "Тел: {phone}\n\n"
+    "Підтвердити чи відхилити?"
+)
+OFFHOURS_APPROVED_CLIENT = (
+    "✅ Ваш запит підтверджено!\n\n"
+    "💆 {service}\n"
+    "📅 {date}, {time_start}\n\n"
+    "Файл для календаря надіслано."
+)
+OFFHOURS_REJECTED_CLIENT = (
+    "На жаль, майстер не може прийняти вас в цей час.\n\n"
+    "💆 {service}\n"
+    "📅 {date}, {time}\n\n"
+    "Зверніться для уточнення іншого часу."
+)
+OFFHOURS_REQUEST_CANCELLED = "Запит скасовано."
+OFFHOURS_REQUEST_CANCELLED_ADMIN = (
+    "❌ Клієнт скасував запит на позаробочий час:\n\n"
+    "{client} — {service}\n"
+    "{date}, {time}"
+)
+OFFHOURS_APPROVED_ADMIN = "Запис підтверджено."
+OFFHOURS_REJECTED_ADMIN = "Запис відхилено."
+NO_PENDING_APPROVALS = "Немає запитів, що очікують підтвердження."
+
 # --- Errors ---
 ERROR_GOOGLE_CALENDAR = (
     "Помилка з'єднання з календарем. Спробуйте пізніше або "

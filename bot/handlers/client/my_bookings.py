@@ -22,6 +22,8 @@ from bot.utils.texts import (
     MONTHS_UK,
     MY_BOOKINGS_EMPTY,
     MY_BOOKINGS_HEADER,
+    OFFHOURS_REQUEST_CANCELLED,
+    OFFHOURS_REQUEST_CANCELLED_ADMIN,
 )
 
 router = Router()
@@ -120,39 +122,53 @@ async def confirm_cancel(
     client = await get_client_by_telegram_id(db, call.from_user.id)
     booking = await get_booking(db, booking_id)
 
+    is_pending = booking and booking.get("status") == "pending_approval"
+
     success = await cancel_existing_booking(
         db, calendar, booking_id, client_id=client["id"] if client else None
     )
     if success:
-        reminder_service.cancel_reminders(booking_id)
-        await call.message.edit_text(BOOKING_CANCELLED, reply_markup=main_menu_keyboard())
-
         start_kyiv = utc_to_kyiv(datetime.fromisoformat(booking["start_time"]))
         name = f"{booking['first_name']} {booking.get('last_name') or ''}".strip()
         date_label = format_date_uk(start_kyiv.date(), MONTHS_UK)
         time_label = format_time(start_kyiv.time())
 
-        cancel_text = CANCEL_BOOKING_ADMIN.format(
-            client=name,
-            service=booking["service_name"],
-            date=date_label,
-            time=time_label,
-        )
-        for aid in admin_ids:
-            await bot.send_message(chat_id=aid, text=cancel_text)
+        if is_pending:
+            await call.message.edit_text(OFFHOURS_REQUEST_CANCELLED, reply_markup=main_menu_keyboard())
+            for aid in admin_ids:
+                await bot.send_message(
+                    chat_id=aid,
+                    text=OFFHOURS_REQUEST_CANCELLED_ADMIN.format(
+                        client=name,
+                        service=booking["service_name"],
+                        date=date_label,
+                        time=time_label,
+                    ),
+                )
+        else:
+            reminder_service.cancel_reminders(booking_id)
+            await call.message.edit_text(BOOKING_CANCELLED, reply_markup=main_menu_keyboard())
 
-        # Determine urgency: confirmed + less than 12h until appointment
-        now = datetime.now(timezone.utc)
-        start_utc = datetime.fromisoformat(booking["start_time"])
-        if not start_utc.tzinfo:
-            from zoneinfo import ZoneInfo
-            start_utc = start_utc.replace(tzinfo=ZoneInfo("UTC"))
-        hours_until = (start_utc - now).total_seconds() / 3600
-        is_urgent = bool(booking.get("confirmed_at")) and hours_until < 12
+            cancel_text = CANCEL_BOOKING_ADMIN.format(
+                client=name,
+                service=booking["service_name"],
+                date=date_label,
+                time=time_label,
+            )
+            for aid in admin_ids:
+                await bot.send_message(chat_id=aid, text=cancel_text)
 
-        await notify_group_cancellation(
-            bot, db, cancellation_group_id, booking, is_urgent=is_urgent
-        )
+            now = datetime.now(timezone.utc)
+            start_utc = datetime.fromisoformat(booking["start_time"])
+            if not start_utc.tzinfo:
+                from zoneinfo import ZoneInfo
+                start_utc = start_utc.replace(tzinfo=ZoneInfo("UTC"))
+            hours_until = (start_utc - now).total_seconds() / 3600
+            is_urgent = bool(booking.get("confirmed_at")) and hours_until < 12
+
+            await notify_group_cancellation(
+                bot, db, cancellation_group_id, booking, is_urgent=is_urgent
+            )
     else:
         await call.message.edit_text(
             "Не вдалось скасувати запис.", reply_markup=main_menu_keyboard()

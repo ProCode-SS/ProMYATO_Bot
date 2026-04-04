@@ -217,7 +217,7 @@ async def cancel_existing_booking(
     If client_id is given, verifies ownership. Returns True on success.
     """
     booking = await get_booking(db, booking_id)
-    if not booking or booking["status"] != "confirmed":
+    if not booking or booking["status"] not in ("confirmed", "pending_approval"):
         return False
     if client_id is not None and booking["client_id"] != client_id:
         return False
